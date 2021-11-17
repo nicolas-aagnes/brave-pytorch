@@ -2,21 +2,18 @@ from argparse import ArgumentParser
 from typing import Any, Dict
 
 import numpy as np
-
 import pytorch_lightning as pl
 import torch
+from pl_bolts.callbacks import (LatentDimInterpolator,
+                                TensorboardGenerativeModelImageSampler)
+from pl_bolts.models.gans.dcgan.components import (DCGANDiscriminator,
+                                                   DCGANGenerator)
+from pl_bolts.utils import _TORCHVISION_AVAILABLE
+from pl_bolts.utils.warnings import warn_missing_pkg
+from pytorch_lightning.loggers import TensorBoardLogger
 from torch import nn
 from torch.utils import data
 from torch.utils.data import DataLoader
-
-from pl_bolts.callbacks import (
-    LatentDimInterpolator,
-    TensorboardGenerativeModelImageSampler,
-)
-from pytorch_lightning.loggers import TensorBoardLogger
-from pl_bolts.models.gans.dcgan.components import DCGANDiscriminator, DCGANGenerator
-from pl_bolts.utils import _TORCHVISION_AVAILABLE
-from pl_bolts.utils.warnings import warn_missing_pkg
 
 if _TORCHVISION_AVAILABLE:
     from torchvision import transforms as transform_lib

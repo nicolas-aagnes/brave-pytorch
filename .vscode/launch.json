@@ -8,7 +8,7 @@
             "name": "Python: Current File",
             "type": "python",
             "request": "launch",
-            "program": "/Users/nico/github/brave-pytorch/dcgan.py",
+            "program": "/Users/nico/github/brave-pytorch/train.py",
             "console": "integratedTerminal",
             "cwd": "/Users/nico/github/brave-pytorch",
             "python.pythonPath": "/Users/nico/github/brave-pytorch/.venv/bin/python",

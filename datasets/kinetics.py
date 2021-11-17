@@ -1,24 +1,20 @@
-from torchvision.datasets.utils import list_dir
-from torchvision.datasets.folder import make_dataset
-from torchvision.datasets.video_utils import VideoClips
-from torchvision.datasets import VisionDataset
 import os
-import torch
+from argparse import ArgumentParser
+from typing import Dict, Optional
 
-import pytorch_lightning as pl
-from torch.utils.data import random_split, DataLoader
-from torchvision.datasets import MNIST
-from torchvision import transforms
-
-from typing import Optional
-from dataclasses import dataclass
-import torchvision.transforms._transforms_video as transforms_video
-
-import dataset
 import numpy as np
+import pytorch_lightning as pl
+import torch
+import torchvision
+from torch.utils.data import DataLoader
+from torchvision.datasets.folder import make_dataset
+from torchvision.datasets.utils import list_dir
+from torchvision.datasets.video_utils import VideoClips
+
+from datasets import video_transforms
 
 
-class Kinetics(VisionDataset):
+class KineticsDataset(torchvision.datasets.VisionDataset):
     """
     `Kinetics-400 <https://deepmind.com/research/open-source/open-source-datasets/kinetics/>`_
     dataset.
@@ -93,24 +89,14 @@ class Kinetics(VisionDataset):
         if not os.path.exists(metadata_filepath):
             torch.save(self.video_clips.metadata, metadata_filepath)
 
-        self.clips_start_index = 0
-        self.clips_end_index = self.video_clips.num_clips()  # Non-inclusive index
-
-    def set_clips_start_and_end_indices(self, start_index, end_index):
-        self.clips_start_index = start_index
-        self.clips_end_index = end_index
-
     @property
     def metadata(self):
         return self.video_clips.metadata
 
     def __len__(self):
-        return self.clips_end_index - self.clips_start_index
+        return self.video_clips.num_clips()
 
-    def __getitem__(self, idx):
-        index = idx + self.clips_start_index
-        # video_q, audio_q, info_q, video_idx_q = self.video_clips.get_clip(idx[0])
-        # video_k, audio_k, info_k, video_idx_k = self.video_clips.get_clip(idx[1])
+    def __getitem__(self, index):
         video, audio, info, video_idx = self.video_clips.get_clip(index)
 
         video = tuple(transform["video"](video) for transform in self.transforms)
@@ -120,36 +106,51 @@ class Kinetics(VisionDataset):
 
 
 class KineticsDataModule(pl.LightningDataModule):
-    def __init__(self, data_dir: str, frames_per_clip: int, frame_rate: int = 25):
+    def __init__(
+        self,
+        data_dir,
+        num_workers,
+        batch_size,
+        frame_rate,
+        image_size_student,
+        num_frames_student,
+        step_student,
+        image_size_teacher,
+        num_frames_teacher,
+        step_teacher,
+    ):
         super().__init__()
-
-        self.frames_per_clip = frames_per_clip
-        self.frame_rate = frame_rate
+        self.save_hyperparameters()
 
         def get_transform(crop_size, num_frames, step):
-            video_transformation = transforms.Compose(
+            video_transformation = torchvision.transforms.Compose(
                 [
-                    transforms_video.ToTensorVideo(),
-                    transforms_video.RandomResizedCropVideo(crop_size, (0.2, 1)),
+                    video_transforms.VideoClipToTensor(),  # D x H x W x C ---> C x D x H x W
+                    video_transforms.SelectFrames(num_frames, step),
+                    torchvision.transforms.RandomResizedCrop(crop_size, (0.2, 1)),
+                    video_transforms.MoCoAugmentV2(crop_size),
                 ]
             )
-            audio_transformation = dataset.DummyAudioTransform()
+            audio_transformation = video_transforms.DummyAudioTransform()
             transformation = {
                 "video": video_transformation,
                 "audio": audio_transformation,
             }
-            self.transforms.append(transformation)
+            return transformation
 
-        self.transforms = [get_transform(112, 16, 2), get_transform(224, 64, 4)]
+        self.transforms = [
+            get_transform(image_size_student, num_frames_student, step_student),
+            get_transform(image_size_teacher, num_frames_teacher, step_teacher),
+        ]
 
     def prepare_data(self):
         # Create video clips.
-        self.kinetics = Kinetics(
-            root=self.data_dir,
-            view_configs=self.view_configs,
-            frames_per_clip=self.frames_per_clip,
+        self.kinetics = KineticsDataset(
+            root=self.hparams.data_dir,
+            frames_per_clip=self.hparams.frames_per_clip,
             step_between_clips=1,
-            frame_rate=self.frame_rate,
+            frame_rate=self.hparams.frame_rate,
+            transforms=self.transforms,
         )
 
         # Split data into train, val and test.
@@ -175,20 +176,38 @@ class KineticsDataModule(pl.LightningDataModule):
             batch_size=self.batch_size,
             shuffle=True,
             drop_last=True,
+            num_workers=self.hparams.num_workers,
         )
 
     def val_dataloader(self):
         return DataLoader(
             dataset=self.dataset_val,
             batch_size=self.batch_size,
-            shuffle=True,
+            shuffle=False,
             drop_last=True,
+            num_workers=self.hparams.num_workers,
         )
 
     def test_dataloader(self):
         return DataLoader(
             dataset=self.dataset_test,
             batch_size=self.batch_size,
-            shuffle=True,
+            shuffle=False,
             drop_last=True,
+            num_workers=self.hparams.num_workers,
         )
+
+    @staticmethod
+    def add_model_specific_args(parent_parser: ArgumentParser) -> ArgumentParser:
+        parser = ArgumentParser(parents=[parent_parser], add_help=False)
+        parser.add_argument("--data_dir", required=True, type=str)
+        parser.add_argument("--num_workers", default=4, type=int)
+        parser.add_argument("--batch_size", default=32, type=int)
+        parser.add_argument("--frame_rate", default=25, type=int)
+        parser.add_argument("--image_size_student", default=224, type=int)
+        parser.add_argument("--num_frames_student", default=16, type=int)
+        parser.add_argument("--step_student", default=2, type=int)
+        parser.add_argument("--image_size_teacher", default=112, type=int)
+        parser.add_argument("--num_frames_teacher", default=64, type=int)
+        parser.add_argument("--step_teacher", default=4, type=int)
+        return parser
