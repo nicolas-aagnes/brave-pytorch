@@ -1,6 +1,5 @@
 import random
 
-import cv2
 import kornia
 import numpy as np
 import torch
@@ -9,29 +8,34 @@ from torch.utils.data import Sampler
 from torchvision.datasets.video_utils import VideoClips
 
 
-class VideoClipToTensor(object):
-    """
-    change input channel
-    D x H x W x C ---> C x D x H x w
-    """
+class PermuteVideoChannels(object):
+    def __init__(self, permutation):
+        self.permutation = permutation
 
     def __call__(self, video_clip):
-        return np.transpose(video_clip, (3, 0, 1, 2))
+        return torch.permute(video_clip, self.permutation)
 
 
 class SelectFrames(object):
     """Select frames at set step."""
 
-    def __init__(self, num_frames, step):
+    def __init__(self, num_frames, step, random_start):
         self.num_frames = num_frames
         self.step = step
+        self.random_start = random_start
 
     def __call__(self, video):
-        # Video should be of shape (T, C, H, W)
-        print("got video shape", video.shape)
-        assert len(video.shape) == 4 and video.shape[1] == 3
-        assert self.num_frames * self.step <= video.shape[0]
-        return video[range(0, self.num_frames * self.step, self.step)]
+        # Video should be of shape (T x H x W x C)
+        assert len(video.shape) == 4 and video.shape[-1] == 3
+        if self.random_start:
+            start_index = random.randint(
+                0, video.shape[0] - (self.num_frames * self.step) - 1
+            )
+            return video[
+                range(start_index, start_index + self.num_frames * self.step, self.step)
+            ]
+        else:
+            return video[range(0, self.num_frames * self.step, self.step)]
 
 
 class GaussianBlur(object):
@@ -47,38 +51,48 @@ class GaussianBlur(object):
         return gauss(x)
 
 
-class MoCoAugmentV2(object):
-    def __init__(self, crop_size):
+class Scale(object):
+    def __call__(self, x):
+        # assert x.max() > 1.0
+        assert -0.1 <= x.min() <= x.max() <= 255.1, (
+            x.shape,
+            x.min(),
+            x.max(),
+            x.mean(),
+        )
+        return x / 255.0
 
-        mean = torch.tensor([0.485, 0.456, 0.406])
-        std = torch.tensor([0.229, 0.224, 0.225])
-        normalize_video = kornia.augmentation.Normalize(mean, std)
-        self.moco_augment_v2 = transforms.Compose(
+
+class VideoTransformTrain(object):
+    def __init__(self, crop_size, num_frames, step, random_start):
+
+        self.transform = transforms.Compose(
             [
-                transforms.RandomApply(
-                    [
-                        kornia.augmentation.ColorJitter(
-                            0.4, 0.4, 0.4, 0.1
-                        )  # not strengthened
-                    ],
-                    p=0.8,
+                SelectFrames(num_frames, step, random_start),
+                PermuteVideoChannels((0, 3, 1, 2)),  # T x H x W x C ---> T x C x H x W
+                transforms.RandomResizedCrop(
+                    crop_size, scale=(0.3, 1), ratio=(0.5, 2.0)
                 ),
-                kornia.augmentation.RandomGrayscale(p=0.2),
+                transforms.RandomHorizontalFlip(p=0.5),
+                # transforms.RandomApply(
+                #     [transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)],  # not strengthened
+                #     p=0.8,
+                # ),
+                transforms.RandomGrayscale(p=0.2),
                 transforms.RandomApply([GaussianBlur([0.1, 2.0], crop_size)], p=0.5),
-                kornia.augmentation.RandomHorizontalFlip(),
-                normalize_video,
+                Scale(),
+                transforms.Normalize(
+                    mean=torch.tensor([0.45, 0.45, 0.45]),
+                    std=torch.tensor([0.225, 0.225, 0.225]),
+                ),
+                PermuteVideoChannels((1, 0, 2, 3)),  # T x C x H x W ---> C x T x H x W
             ]
         )
 
-    def __call__(self, clips):
-        # from (B, C, T, H, W) to (B, T, C, H, W)
-        clips = clips.permute(0, 2, 1, 3, 4).contiguous()
-        clips_batch = clips.view(-1, clips.shape[2], clips.shape[3], clips.shape[4])
-        aug_clips = self.moco_augment_v2(clips_batch)
-        aug_clips = aug_clips.view(clips.shape)
-        # from (B, T, C, H, W) to (B, C, T, H, W)
-        aug_clips = aug_clips.permute(0, 2, 1, 3, 4).contiguous()
-        return aug_clips
+    def __call__(self, x):
+        # Input tensor should be of shape T x H x W x C.
+        x = self.transform(x.float())
+        return x
 
 
 class DummyAudioTransform(object):

@@ -1,6 +1,9 @@
+import argparse
+import os
 from argparse import ArgumentParser
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
+import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
@@ -17,32 +20,44 @@ video_model_names = sorted(
 )
 
 
+def prefix_metrics_keys(
+    metrics_dict: Dict[str, float], prefix: str
+) -> Dict[str, float]:
+    return {prefix + "." + k: v for k, v in metrics_dict.items()}
+
+
 class Brave(pl.LightningModule):
     def __init__(
         self,
         arch: str,
         num_features: int,
+        hidden_dim: int,
         output_dim: int,
-        optimizer_config: Dict[str, Any],
+        learning_rate: float,
     ):
         super().__init__()
         self.save_hyperparameters()
 
         self.student = torchvision.models.video.__dict__[arch](num_classes=num_features)
         self.teacher = torchvision.models.video.__dict__[arch](num_classes=num_features)
-        self.projector = Projector(num_features, output_dim)
-        self.predictor = Predictor(output_dim, output_dim)
+        self.projector = Projector(num_features, output_dim, hidden_dim)
+        self.predictor = Predictor(output_dim, output_dim, hidden_dim)
 
     def forward(self, batch):
-        # Get student and teacher batch.
-        video, audio = batch
-        x_s, x_t = video
+        # Compute student embedding.
+        video, labels = batch
+        embeddings = self.student(video.float())
+        return embeddings, labels
 
-        print(x_s.shape, x_t.shape)
-        assert 1 == 0
+    def on_train_start(self):
+        self.logger.log_hyperparams(self.hparams)
 
-        x_s = torch.transpose(x_s, 2, 1)
-        x_t = torch.transpose(x_t, 2, 1)
+    def test_step(self, batch, batch_idx):
+        return self(batch)
+
+    def training_step(self, batch, batch_idx):
+        # Get student and teacher videos.
+        x_s, x_t = batch[0].float(), batch[1].float()
 
         # Compute student and teacher embeddings.
         f_s = self.student(x_s)
@@ -64,41 +79,31 @@ class Brave(pl.LightningModule):
 
         # Aggregate student and teacher losses.
         loss = loss_s_to_t + loss_t_to_s
-        return loss
 
-    def on_train_start(self):
-        self.logger.log_hyperparams(self.hparams, {"Loss/train": 0})
+        # Log times.
+        profiler_times = self.trainer.profiler.recorded_durations
+        if len(profiler_times["run_training_batch"]) > 0:
+            compute_time = np.array(profiler_times["run_training_batch"]).mean()
+            data_time = np.array(profiler_times["get_train_batch"]).mean()
+        else:
+            compute_time = -1.0
+            data_time = -1.0
 
-    def training_step(self, batch, batch_idx):
-        loss = self(batch)
+        self.log("compute_time", compute_time, prog_bar=True)
+        self.log("data_time", data_time, prog_bar=True)
+
         return loss
 
     def training_epoch_end(self, outputs):
         # Outputs is a list of dict output for exach optimizer from the training step.
         self.log(
-            "Loss/train",
+            "loss",
             torch.mean(torch.stack(tuple(out["loss"] for out in outputs))),
             on_epoch=True,
-        )
-
-    def on_train_start(self):
-        self.logger.log_hyperparams(self.hparams, {"Loss/val": 0})
-
-    def validation_step(self, batch, batch_idx):
-        loss = self(batch)
-        return loss
-
-    def val_epoch_end(self, outputs):
-        # Outputs is a list of dict output for exach optimizer from the training step.
-        self.log(
-            "Loss/val",
-            torch.mean(torch.stack(tuple(out["loss"] for out in outputs))),
-            on_epoch=True,
+            sync_dist=True,
         )
 
     def configure_optimizers(self):
-        config = dict(self.hparams.optimizer_config)
-
         # Predictor parameters have a 10x learning rate.
         backbone_params, predictor_params = [], []
         for name, param in self.named_parameters():
@@ -107,53 +112,39 @@ class Brave(pl.LightningModule):
             else:
                 backbone_params.append(param)
 
-        optimizer = torch.optim.SGD(
+        optimizer = torch.optim.Adam(
             [
-                {"params": backbone_params, "lr": config["lr"]},
-                {"params": predictor_params, "lr": config["lr"] * 10},
-            ],
-            momentum=config["momentum"],
-            weight_decay=config["wd"],
-            nesterov=config["nesterov_use"],
+                {"params": backbone_params, "lr": self.hparams.learning_rate},
+                {"params": predictor_params, "lr": self.hparams.learning_rate * 10},
+            ]
         )
-        # if config["lars_use"]:
-        #     optimizer = pl_bolts.optimizers.lars_scheduling.LARSWrapper(
-        #         optimizer, eta=config["trust_coefficient"]
-        #     )
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer=optimizer, mode="min", factor=0.3, patience=3, verbose=True
+        )
 
-        if config["scheduler_name"] == "cosine_decay":
-            lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-                optimizer,
-                T_0=config["scheduler_warmup_steps"],
-                last_epoch=config["scheduler_max_epochs"],
-            )
-            return optimizer, lr_scheduler
-
-        return optimizer
+        return {"optimizer": optimizer, "lr_scheduler": scheduler, "monitor": "loss"}
 
     @staticmethod
-    def add_model_specific_args(parent_parser: ArgumentParser) -> ArgumentParser:
-        parser = ArgumentParser(parents=[parent_parser], add_help=False)
+    def add_model_specific_args(parser: ArgumentParser, hyperopt: bool = False):
+        if not hyperopt:
+            parser = ArgumentParser(parents=[parser], add_help=False)
+            parser.add_argument("--learning_rate", default=0.01, type=float)
+
+        else:
+            parser.opt_list(
+                "--learning_rate",
+                default=1.0,
+                # options=[10.0, 3.0, 1.0, 0.3, 0.1, 0.03, 0.01, 0.003],
+                options=[10.0, 3.0],
+                type=float,
+                tunable=True,
+            )
+
         parser.add_argument(
-            "--arch", default="r2plus1d_18", choices=["mc3_18", "r2plus1d_18", "r3d_18"]
+            "--arch", default="r3d_18", choices=["mc3_18", "r2plus1d_18", "r3d_18"]
         )
         parser.add_argument("--num_features", default=2048, type=int)
+        parser.add_argument("--hidden_dim", default=4096, type=int)
         parser.add_argument("--output_dim", default=128, type=int)
-        parser.add_argument("--optimizer_lr", default=4.8, type=float)
-        parser.add_argument("--optimizer_momentum", default=0.9, type=float)
-        parser.add_argument("--optimizer_wd", default=0.0000001, type=float)
-        parser.add_argument("--optimizer_nesterov_use", default=True, type=bool)
-        parser.add_argument("--optimizer_lars_use", default=True, type=bool)
-        parser.add_argument(
-            "--optimizer_lars_trust_coefficient", default=0.001, type=float
-        )
-        parser.add_argument(
-            "--optimizer_scheduler_name", default="cosine-decay", type=str
-        )
-        parser.add_argument(
-            "--optimizer_scheduler_warmup_steps", default=5000, type=int
-        )
-        parser.add_argument(
-            "--optimizer_scheduler_max_epochs", default=300000, type=int
-        )
+
         return parser

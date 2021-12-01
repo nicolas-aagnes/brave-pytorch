@@ -18,21 +18,18 @@ class DummyKineticsDataset(torchvision.datasets.VisionDataset):
 
     def __getitem__(self, idx):
         student_view = torch.zeros(
-            self.params["num_frames_student"],
             3,
+            self.params["num_frames_student"],
             self.params["image_size_student"],
             self.params["image_size_student"],
         )
         teacher_view = torch.zeros(
-            self.params["num_frames_teacher"],
             3,
+            self.params["num_frames_teacher"],
             self.params["image_size_teacher"],
             self.params["image_size_teacher"],
         )
-        return (student_view, teacher_view), (
-            torch.zeros(self.params["num_frames_student"], 1),
-            torch.zeros(self.params["num_frames_teacher"], 1),
-        )
+        return student_view, teacher_view
 
 
 class DummyKineticsDataModule(pl.LightningDataModule):
@@ -74,12 +71,11 @@ class DummyKineticsDataModule(pl.LightningDataModule):
     def setup(self, stage: Optional[str] = None):
         # Assign train/val datasets for use in dataloaders
         if stage == "fit" or stage is None:
-            self.dataset_train = DummyKineticsDataset(8, dict(self.hparams))
-            self.dataset_val = DummyKineticsDataset(8, dict(self.hparams))
+            self.dataset_train = DummyKineticsDataset(20000, dict(self.hparams))
 
         # Assign test dataset for use in dataloader(s)
         if stage == "test" or stage is None:
-            self.dataset_test = DummyKineticsDataset(8, dict(self.hparams))
+            raise NotImplementedError
 
     def train_dataloader(self):
         return torch.utils.data.DataLoader(
@@ -87,25 +83,7 @@ class DummyKineticsDataModule(pl.LightningDataModule):
             batch_size=self.hparams.batch_size,
             shuffle=True,
             drop_last=True,
-            num_workers=0,
-        )
-
-    def val_dataloader(self):
-        return torch.utils.data.DataLoader(
-            dataset=self.dataset_val,
-            batch_size=self.hparams.batch_size,
-            shuffle=False,
-            drop_last=True,
-            num_workers=0,
-        )
-
-    def test_dataloader(self):
-        return torch.utils.data.DataLoader(
-            dataset=self.dataset_test,
-            batch_size=self.hparams.batch_size,
-            shuffle=False,
-            drop_last=True,
-            num_workers=0,
+            num_workers=self.hparams.num_workers,
         )
 
     @staticmethod
