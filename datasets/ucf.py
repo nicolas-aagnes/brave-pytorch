@@ -125,7 +125,7 @@ class UCF101(VisionDataset):
         return indices
 
     def __len__(self) -> int:
-        return 10000
+        return 100000
         return self.video_clips.num_clips()
 
     def __getitem__(self, idx: int) -> Tuple[Tensor, Tensor, int]:
@@ -224,7 +224,7 @@ class UCF101DataModule(pl.LightningDataModule):
         return DataLoader(
             dataset=self.dataset,
             batch_size=self.hparams.batch_size,
-            shuffle=True,
+            shuffle=False,
             drop_last=False,
             num_workers=self.hparams.num_workers,
         )

@@ -78,7 +78,7 @@ if __name__ == "__main__":
     cluster.add_command("source .svl/bin/activate")
 
     # SLURM commands.
-    cluster.add_slurm_cmd(cmd="partition", value="svl", comment="")
+    cluster.add_slurm_cmd(cmd="partition", value="macondo", comment="")
     cluster.add_slurm_cmd(cmd="qos", value="normal", comment="")
     cluster.add_slurm_cmd(cmd="time", value="48:00:00", comment="")
     cluster.add_slurm_cmd(cmd="ntasks-per-node", value=1, comment="")

@@ -56,7 +56,7 @@ def evaluate(args, cluster):
     out = trainer.predict(model, datamodule=datamodule)
     train_embeddings = torch.cat(list(x for x, y in out)).detach().cpu().numpy()
     train_labels = torch.cat(list(y for x, y in out)).detach().cpu().numpy()
-    print(torch.unique(train_labels, return_counts=True))
+    print(np.unique(train_labels))
 
     print("Computing test embeddings.")
     datamodule.setup("test")
@@ -118,7 +118,8 @@ if __name__ == "__main__":
     parser.opt_list(
         "--checkpoint_path",
         options=[
-            "/vision/u/naagnes/github/brave-pytorch/runs_clean/brave/logs/trial_5_2021-11-30__19-57-44_slurm_cmd/default/version_0/checkpoints/model-epoch=08.ckpt"
+            "/vision/u/naagnes/github/brave-pytorch/runs_clean/brave/logs/trial_5_2021-11-30__19-57-44_slurm_cmd/default/version_0/checkpoints/model-epoch=40.ckpt",
+            "/vision/u/naagnes/github/brave-pytorch/runs_clean/brave/logs/trial_7_2021-11-30__19-57-44_slurm_cmd/default/version_0/checkpoints/model-epoch=46.ckpt",
         ],
         type=str,
         tunable=True,
@@ -141,7 +142,7 @@ if __name__ == "__main__":
     # SLURM commands.
     cluster.add_slurm_cmd(cmd="partition", value="svl", comment="")
     cluster.add_slurm_cmd(cmd="qos", value="normal", comment="")
-    cluster.add_slurm_cmd(cmd="time", value="12:00:00", comment="")
+    cluster.add_slurm_cmd(cmd="time", value="24:00:00", comment="")
     cluster.add_slurm_cmd(cmd="ntasks-per-node", value=1, comment="")
     cluster.add_slurm_cmd(cmd="cpus-per-task", value=32, comment="")
     cluster.add_slurm_cmd(cmd="mem", value="30G", comment="")
@@ -151,4 +152,4 @@ if __name__ == "__main__":
     cluster.per_experiment_nb_nodes = 1
     cluster.gpu_type = "titanrtx"
 
-    cluster.optimize_parallel_cluster_gpu(evaluate, nb_trials=1, job_name="ucf101")
+    cluster.optimize_parallel_cluster_gpu(evaluate, nb_trials=2, job_name="ucf101")

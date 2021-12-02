@@ -1,4 +1,4 @@
-python hyperopt.py \
+python train.py \
     --data_dir /vision/u/naagnes/video/train \
     --accelerator gpu \
     --gpus -1 \

@@ -115,9 +115,10 @@ class Brave(pl.LightningModule):
         optimizer = torch.optim.Adam(
             [
                 {"params": backbone_params, "lr": self.hparams.learning_rate},
-                {"params": predictor_params, "lr": self.hparams.learning_rate * 10},
+                {"params": predictor_params, "lr": self.hparams.learning_rate},
             ]
         )
+        # optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer=optimizer, mode="min", factor=0.3, patience=3, verbose=True
         )
@@ -129,20 +130,26 @@ class Brave(pl.LightningModule):
         if not hyperopt:
             parser = ArgumentParser(parents=[parser], add_help=False)
             parser.add_argument("--learning_rate", default=0.01, type=float)
-
+            parser.add_argument(
+                "--arch", default="r3d_18", choices=["mc3_18", "r2plus1d_18", "r3d_18"]
+            )
         else:
             parser.opt_list(
                 "--learning_rate",
                 default=1.0,
-                # options=[10.0, 3.0, 1.0, 0.3, 0.1, 0.03, 0.01, 0.003],
-                options=[10.0, 3.0],
+                options=[10.0, 3.0, 1.0, 0.3, 0.1, 0.03, 0.01, 0.003],
+                # options=[10.0, 3.0],
                 type=float,
                 tunable=True,
             )
+            parser.opt_list(
+                "--arch",
+                default="r3d_18",
+                options=["mc3_18", "r2plus1d_18", "r3d_18"],
+                type=str,
+                tunable=True,
+            )
 
-        parser.add_argument(
-            "--arch", default="r3d_18", choices=["mc3_18", "r2plus1d_18", "r3d_18"]
-        )
         parser.add_argument("--num_features", default=2048, type=int)
         parser.add_argument("--hidden_dim", default=4096, type=int)
         parser.add_argument("--output_dim", default=128, type=int)
